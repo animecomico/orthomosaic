@@ -3,6 +3,7 @@ import numpy as np
 import utilities as util
 import geometry as gm
 import copy
+import imutils
 
 class Combiner:
     def __init__(self,imageList_,dataMatrix_):
@@ -13,7 +14,11 @@ class Combiner:
         '''
         self.imageList = []
         self.dataMatrix = dataMatrix_
-        detector = cv2.ORB()
+        detector = None
+        if imutils.is_cv2():
+            detector = cv2.ORB()
+        elif imutils.is_cv3():
+            detector = cv2.ORB_create()
         for i in range(0,len(imageList_)):
             image = imageList_[i][::2,::2,:] #downsample the image to speed things up. 4000x3000 is huge!
             M = gm.computeUnRotMatrix(self.dataMatrix[i,:])
@@ -23,6 +28,7 @@ class Combiner:
             correctedImage = gm.warpPerspectiveWithPadding(image,M)
             self.imageList.append(correctedImage) #store only corrected images to use in combination
         self.resultImage = self.imageList[0]
+
     def createMosaic(self):
         for i in range(1,len(self.imageList)):
             self.combine(i)
@@ -43,8 +49,12 @@ class Combiner:
         Descriptor computation and matching.
         Idea: Align the images by aligning features.
         '''
-        detector = cv2.SURF(500) #SURF showed best results
-        detector.extended = True
+        detector = None
+        if imutils.is_cv2():
+            detector = cv2.SURF(500) #SURF showed best results
+            detector.extended = True
+        elif imutils.is_cv3():
+            detector = cv2.xfeatures2d.SIFT_create()
         gray1 = cv2.cvtColor(image1,cv2.COLOR_BGR2GRAY)
         ret1, mask1 = cv2.threshold(gray1,1,255,cv2.THRESH_BINARY)
         kp1, descriptors1 = detector.detectAndCompute(gray1,mask1) #kp = keypoints
@@ -54,9 +64,15 @@ class Combiner:
         kp2, descriptors2 = detector.detectAndCompute(gray2,mask2)
 
         #Visualize matching procedure.
-        keypoints1Im = cv2.drawKeypoints(image1,kp1,color=(0,0,255))
+        keypoints1Im = None
+        keypoints2Im = None
+        if imutils.is_cv2():
+            keypoints1Im = cv2.drawKeypoints(image1,kp1,color=(0,0,255))
+            keypoints2Im = cv2.drawKeypoints(image2, kp2, color=(0, 0, 255))
+        elif imutils.is_cv3():
+            keypoints1Im = cv2.drawKeypoints(image1, kp1, None, color=(0, 0, 255))
+            keypoints2Im = cv2.drawKeypoints(image2, kp2, None, color=(0, 0, 255))
         util.display("KEYPOINTS",keypoints1Im)
-        keypoints2Im = cv2.drawKeypoints(image2,kp2,color=(0,0,255))
         util.display("KEYPOINTS",keypoints2Im)
 
         matcher = cv2.BFMatcher() #use brute force matching
@@ -80,10 +96,18 @@ class Combiner:
         Compute Affine Transform
         Idea: Because we corrected for camera orientation, an affine transformation *should* be enough to align the images
         '''
+        A = None
         A = cv2.estimateRigidTransform(src_pts,dst_pts,fullAffine=False) #false because we only want 5 DOF. we removed 3 DOF when we unrotated
-        if A == None: #RANSAC sometimes fails in estimateRigidTransform(). If so, try full homography. OpenCV RANSAC implementation for homography is more robust.
-            HomogResult = cv2.findHomography(src_pts,dst_pts,method=cv2.RANSAC)
-            H = HomogResult[0]
+        print('Transformarion....')
+        print(A)
+        if imutils.is_cv2():
+            if A == None: #RANSAC sometimes fails in estimateRigidTransform(). If so, try full homography. OpenCV RANSAC implementation for homography is more robust.
+                HomogResult = cv2.findHomography(src_pts,dst_pts,method=cv2.RANSAC)
+                H = HomogResult[0]
+        elif imutils.is_cv3():
+            if A is None: #RANSAC sometimes fails in estimateRigidTransform(). If so, try full homography. OpenCV RANSAC implementation for homography is more robust.
+                HomogResult = cv2.findHomography(src_pts,dst_pts,method=cv2.RANSAC)
+                H = HomogResult[0]
 
         '''
         Compute 4 Image Corners Locations
@@ -97,12 +121,20 @@ class Combiner:
         for i in range(0,4):
             cornerX = corners2[i,0]
             cornerY = corners2[i,1]
-            if A != None: #check if we're working with affine transform or perspective transform
-                warpedCorners2[i,0] = A[0,0]*cornerX + A[0,1]*cornerY + A[0,2]
-                warpedCorners2[i,1] = A[1,0]*cornerX + A[1,1]*cornerY + A[1,2]
-            else:
-                warpedCorners2[i,0] = (H[0,0]*cornerX + H[0,1]*cornerY + H[0,2])/(H[2,0]*cornerX + H[2,1]*cornerY + H[2,2])
-                warpedCorners2[i,1] = (H[1,0]*cornerX + H[1,1]*cornerY + H[1,2])/(H[2,0]*cornerX + H[2,1]*cornerY + H[2,2])
+            if imutils.is_cv2():
+                if A != None: #check if we're working with affine transform or perspective transform
+                    warpedCorners2[i,0] = A[0,0]*cornerX + A[0,1]*cornerY + A[0,2]
+                    warpedCorners2[i,1] = A[1,0]*cornerX + A[1,1]*cornerY + A[1,2]
+                else:
+                    warpedCorners2[i,0] = (H[0,0]*cornerX + H[0,1]*cornerY + H[0,2])/(H[2,0]*cornerX + H[2,1]*cornerY + H[2,2])
+                    warpedCorners2[i,1] = (H[1,0]*cornerX + H[1,1]*cornerY + H[1,2])/(H[2,0]*cornerX + H[2,1]*cornerY + H[2,2])
+            elif imutils.is_cv3():
+                if A.any(): #check if we're working with affine transform or perspective transform
+                    warpedCorners2[i,0] = A[0,0]*cornerX + A[0,1]*cornerY + A[0,2]
+                    warpedCorners2[i,1] = A[1,0]*cornerX + A[1,1]*cornerY + A[1,2]
+                else:
+                    warpedCorners2[i,0] = (H[0,0]*cornerX + H[0,1]*cornerY + H[0,2])/(H[2,0]*cornerX + H[2,1]*cornerY + H[2,2])
+                    warpedCorners2[i,1] = (H[1,0]*cornerX + H[1,1]*cornerY + H[1,2])/(H[2,0]*cornerX + H[2,1]*cornerY + H[2,2])
         allCorners = np.concatenate((corners1, warpedCorners2), axis=0)
         [xMin, yMin] = np.int32(allCorners.min(axis=0).ravel() - 0.5)
         [xMax, yMax] = np.int32(allCorners.max(axis=0).ravel() + 0.5)
@@ -110,12 +142,24 @@ class Combiner:
         '''Compute Image Alignment and Keypoint Alignment'''
         translation = np.float32(([1,0,-1*xMin],[0,1,-1*yMin],[0,0,1]))
         warpedResImg = cv2.warpPerspective(self.resultImage, translation, (xMax-xMin, yMax-yMin))
-        if A == None:
-            fullTransformation = np.dot(translation,H) #again, images must be translated to be 100% visible in new canvas
-            warpedImage2 = cv2.warpPerspective(image2, fullTransformation, (xMax-xMin, yMax-yMin))
-        else:
-            warpedImageTemp = cv2.warpPerspective(image2, translation, (xMax-xMin, yMax-yMin))
-            warpedImage2 = cv2.warpAffine(warpedImageTemp, A, (xMax-xMin, yMax-yMin))
+        if imutils.is_cv2():
+            if A == None:
+                fullTransformation = np.dot(translation,H) #again, images must be translated to be 100% visible in new canvas
+                warpedImage2 = cv2.warpPerspective(image2, fullTransformation, (xMax-xMin, yMax-yMin))
+            else:
+                warpedImageTemp = cv2.warpPerspective(image2, translation, (xMax-xMin, yMax-yMin))
+                warpedImage2 = cv2.warpAffine(warpedImageTemp, A, (xMax-xMin, yMax-yMin))
+        elif imutils.is_cv3():
+            if A is None:
+                fullTransformation = np.dot(translation,
+                                            H)  # again, images must be translated to be 100% visible in new canvas
+                warpedImage2 = cv2.warpPerspective(image2, fullTransformation, (xMax - xMin, yMax - yMin))
+                util.display("warped0", warpedImage2)
+            else:
+                warpedImageTemp = cv2.warpPerspective(image2, translation, (xMax - xMin, yMax - yMin))
+                warpedImage2 = cv2.warpAffine(warpedImageTemp, A, (xMax - xMin, yMax - yMin))
+                util.display("warped1", warpedImage2)
+
         self.imageList[index2] = copy.copy(warpedImage2) #crucial: update old images for future feature extractions
 
         resGray = cv2.cvtColor(self.resultImage,cv2.COLOR_BGR2GRAY)
